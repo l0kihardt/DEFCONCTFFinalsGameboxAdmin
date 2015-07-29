@@ -1,0 +1,98 @@
+#!/bin/bash -eu
+
+interval=1
+use_long=
+use_unknown=
+
+# maximum allowed etimes for each task
+declare -a tasks
+declare -A exe max_etimes
+tasks=(test test)
+
+exe[test]=/bin/bash:/usr/bin/cat
+exe[eliza]=/bin/bash
+
+max_etimes[test]=1
+max_etimes[eliza]=30
+max_etimes[imap]=30
+max_etimes[wdub]=30
+max_etimes[justify]=30
+
+### log
+
+log_generic() { fmt=$1; echo -e "$(date +%T.%N) $fmt" "${@:2}"; }
+log_action() { tput setaf 2; log_generic "$@"; tput sgr0; }
+
+### getopt
+
+usage() {
+  cat <<e
+Usage: ${0##*/} OPTIONS
+kill long running or unknown processes
+Options:
+  -i, --interval N  scan interval
+  -l, --long        kill long
+  -u, --unknown     kill unknown comm (basename of /proc/*/exe)
+e
+  exit $1
+}
+
+set -- $(getopt -o hi:lu -l help,interval,long,unknown -- "$@")
+
+while :; do
+  case "$1" in
+    -h | --help) usage 0;;
+    -i | --interval) eval interval=$2; shift 2;;
+    -l | --long) use_long=1; shift;;
+    -u | --unknown) use_unknown=1; shift;;
+    --) shift; break;;
+    *) break;;
+  esac
+done
+
+if [[ -z $use_unknown && -z $use_long ]]; then
+  echo no mode specified
+  usage 1
+fi
+
+### main
+
+cease() {
+  if sudo -u $user kill -9 $pid; then
+    log_action kill unknown: pid=$pid etimes=$etimes comm=$comm
+  fi
+}
+
+main() {
+  while :; do
+    local now=$(date +%s)
+    ps -u "${tasks[*]}" -o pid,user,etimes,comm -ww --no-headers | while read pid user etimes comm; do
+      # kill long
+      if [[ -n $use_long ]]; then
+        if [[ $etimes -gt ${max_etimes[$user]} ]]; then
+          cease $user $pid
+        fi
+      fi
+
+      # kill unknown
+      if [[ -n $use_unknown ]]; then
+        IFS=: read -ra t <<< "${exe[$user]}"
+        found=
+        for i in "${t[@]}"; do
+          if [[ ${i##*/} = $comm ]]; then
+            found=1
+            continue
+          fi
+        done
+        if [[ -z $found ]]; then
+          cease $user $pid
+        fi
+      fi
+
+    done
+    ((delay=now+interval-$(date +%s))) || :
+    ((delay>0)) && sleep $delay || :
+  done
+}
+
+main
