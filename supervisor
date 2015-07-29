@@ -1,0 +1,37 @@
+#!/bin/zsh
+# send notifications when some service is down
+set -u
+
+interval=2
+timeout=5
+gamebox=127.1
+
+declare -A check
+check[killer]='pgrep -x killer'
+check[inotify-flag@test]='pgrep -u test -x inotify-flag'
+
+declare -a bad
+
+while :; do
+  bad=
+  local now=$(date +%s)
+  local ssh_error=
+  for i in ${(@k)check}; do
+    ssh -p 5022 -o ConnectTimeout=$timeout $gamebox "${check[$i]} > /dev/null"
+    ret=$?
+    if [[ $ret == 255 ]]; then
+      ssh_error=1
+      break
+    fi
+    if [[ $ret != 0 ]]; then
+      bad=(${bad[@]} $i)
+    fi
+  done
+  if [[ -n $ssh_error ]]; then
+    notify-send -a CTF 'ssh error'
+  elif (( ${#bad} > 0 )); then
+    notify-send -a CTF "bad: ${bad[*]}"
+  fi
+  ((delay=now+interval-$(date +%s))) || :
+  ((delay>0)) && sleep $delay || :
+done

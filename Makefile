@@ -1,4 +1,4 @@
-CFLAGS += -std=c99 -g3
+CFLAGS += -std=c99 -g3 -pthread
 #CFLAGS += -fkeep-inline-functions -fsanitize=address
 ELF := proxy-service inotify-flag
 

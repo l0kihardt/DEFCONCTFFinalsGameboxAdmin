@@ -1,0 +1,39 @@
+#!/bin/zsh
+# Download latest PCAP regularly with sftp and dissect PCAP into smaller ones based on TCP ports
+
+setopt nullglob
+setopt extended_glob
+
+sftp_cmd='sftp -i /home/ray/Defcon/recon/home/ctf/blue-lotus-capture -b- blue-lotus@10.5.10.3'
+remote_filename=latest.cap
+interval=60
+captures_path=/data/captures
+last_saved=$(echo $captures_path/all/*(on[-1]:t))
+
+typeset -A services
+services=(eliza 8888 wdub 4444 imap 143 justify 6969)
+
+mkdir -p $captures_path/all
+for service in ${(k)services}; do
+  mkdir -p $captures_path/$service
+done
+
+while :; do
+  now=$(date +%s)
+  $=sftp_cmd <<< "ls -l $remote_filename" | while read mode links uid gid size month day tim filename; do
+    if [[ $mode != "sftp>" ]]; then
+      if [[ $tim != $last_saved ]]; then
+        filename=$(date +%d-%R).cap
+        $=sftp_cmd <<< "get -p $remote_filename $captures_path/all/$filename"
+        last_saved=$tim
+
+        for service in ${(k)services}; do
+          tshark -r $captures_path/all/$filename -2R "tcp.port==${services[$service]} and ip.addr==10.5.10.2 and ip.addr!=10.5.10.0/24" -w $captures_path/$service/$filename
+        done
+      fi
+    fi
+  done
+
+  ((delay=now+interval-$(date +%s)))
+  ((delay>0)) && sleep $delay
+done

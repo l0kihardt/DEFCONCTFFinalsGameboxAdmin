@@ -2,24 +2,25 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <execinfo.h>
-#include <stdarg.h>
-#include <sys/select.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
-#include <time.h>
-#include <sys/time.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sysexits.h>
+#include <time.h>
 #include <unistd.h>
 
 #define FOR(i, a, b) for (int i = (a); i < (b); i++)
@@ -39,7 +40,9 @@
 #define FLAG_BUFSIZE 1213
 #define ACCESS_COOLDOWN_SECOND 5
 #define IS_FLAG_CHAR(c) (isalnum(c) || (c) == '-')
-#define SEND_TIMEOUT_MILLI 100
+#define SEND_TIMEOUT_MILLI 2000
+
+bool verbose = false;
 
 ///// log
 
@@ -191,8 +194,14 @@ void print_usage(FILE *fh)
   exit(fh == stdout ? 0 : EX_USAGE);
 }
 
-char *notify_host = NULL;
-int notify_port;
+///// main
+
+int nnotifies = 0;
+struct Notify
+{
+  struct in_addr addr;
+  int port;
+} notifies[10];
 
 int nwatched = 0;
 struct Watch
@@ -259,26 +268,21 @@ void rm_inotify_flag(int inotify_fd, const struct inotify_event *ev, const struc
     }
 }
 
-void notify(const char *format, ...)
+struct WorkerData
 {
-  if (! notify_host) return;
-
   char *buf;
-  int len, nwrite = 0;
-  va_list ap;
-  va_start(ap, format);
-  if ((len = vasprintf(&buf, format, ap)) < 0)
-    err_exit(EX_OSERR, "vasprintf");
-  va_end(ap);
-  log_action("notify %s", buf);
+  int len;
+  struct Notify *notify;
+};
+
+void *notify_worker(void *data_)
+{
+  struct WorkerData *data = (struct WorkerData *)data_;
 
   struct sockaddr_in sin;
   sin.sin_family = AF_INET;
-  if (inet_aton(notify_host, &sin.sin_addr) < 0) {
-    err_msg("inet_aton");
-    goto quit;
-  }
-  sin.sin_port = htons(notify_port);
+  sin.sin_addr = data->notify->addr;
+  sin.sin_port = htons(data->notify->port);
 
   int sockfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
   if (sockfd < 0) {
@@ -291,11 +295,12 @@ void notify(const char *format, ...)
   FD_ZERO(&wfds);
   FD_SET(sockfd, &wfds);
   struct timeval timeout = {.tv_sec=SEND_TIMEOUT_MILLI/1000, .tv_usec=SEND_TIMEOUT_MILLI%1000*1000};
-  while (nwrite < len) {
+  for (int nwrite = 0; nwrite < data->len; ) {
     int res = select(sockfd+1, NULL, &wfds, NULL, &timeout); // Linux modifies timeout
     if (res < 0) {
       if (errno == EINTR) continue;
-      return false;
+      err_msg("select");
+      goto quit;
     }
     if (! res) {
       err_msg("timeout to notify");
@@ -310,7 +315,7 @@ void notify(const char *format, ...)
       }
       connected = true;
     } else {
-      res = write(sockfd, buf+nwrite, len-nwrite);
+      res = write(sockfd, data->buf+nwrite, data->len-nwrite);
       if (res < 0) {
         err_msg("write");
         goto quit;
@@ -322,6 +327,38 @@ void notify(const char *format, ...)
 quit:
   if (sockfd >= 0)
     close(sockfd);
+  free(data->buf);
+  free(data);
+}
+
+void notify(const char *format, ...)
+{
+  char *buf;
+  int len;
+  va_list ap;
+  va_start(ap, format);
+  if ((len = vasprintf(&buf, format, ap)) < 0)
+    err_exit(EX_OSERR, "vasprintf");
+  va_end(ap);
+  if (verbose)
+    log_action("notify %s", buf);
+
+  pthread_t tid;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED))
+    err_exit(EX_OSERR, "pthread_attr_setdetachstate");
+
+  REP(i, nnotifies) {
+    struct WorkerData *data = malloc(sizeof(struct WorkerData));
+    data->buf = strdup(buf);
+    data->len = len;
+    data->notify = &notifies[i];
+    if (pthread_create(&tid, &attr, notify_worker, data) < 0)
+      err_msg("pthread_create");
+  }
+
+  pthread_attr_destroy(&attr);
   free(buf);
 }
 
@@ -349,7 +386,7 @@ void new_flag(struct Watch *watch)
   if (i) {
     const char *service = strrchr(watch->path, '/')+1;
     flag[i] = '\0';
-    notify("{\"event\":\"new\",\"timestamp\":%ld.%09ld,\"service\":\"%s\",\"flag\":\"%s\"\n", (long)now.tv_sec, now.tv_nsec, service, flag);
+    notify("{\"event\":\"new\",\"timestamp\":%ld.%09ld,\"service\":\"%s\",\"flag\":\"%s\"}\n", (long)now.tv_sec, now.tv_nsec, service, flag);
   }
 
 quit:
@@ -365,7 +402,7 @@ void do_access(struct Watch *watch)
     err_exit(EX_OSERR, "clock_gettime");
   double nowd = now.tv_sec + now.tv_nsec * 1e-9;
   if (nowd - watch->last_access >= ACCESS_COOLDOWN_SECOND) {
-    notify("{\"event\":\"access\",\"timestamp\":%ld.%09ld,\"service\":\"%s\"\n", (long)now.tv_sec, now.tv_nsec, service);
+    notify("{\"event\":\"access\",\"timestamp\":%ld.%09ld,\"service\":\"%s\"}\n", (long)now.tv_sec, now.tv_nsec, service);
     watch->last_access = nowd;
   }
 }
@@ -378,6 +415,7 @@ int main(int argc, char *argv[])
     {"count",               required_argument, 0,   'c'},
     {"help",                no_argument,       0,   'h'},
     {"notify",              required_argument, 0,   'n'},
+    {"verbose",             no_argument,       0,   'v'},
     {0,                     0,                 0,   0},
   };
 
@@ -385,7 +423,7 @@ int main(int argc, char *argv[])
   if (inotify_fd < 0)
     err_exit(EX_OSERR, "inotify_init");
 
-  while ((opt = getopt_long(argc, argv, "-c:hn:", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "-c:hn:v", long_options, NULL)) != -1) {
     switch (opt) {
     case 1: {
       struct Watch *watch = new_watch();
@@ -409,16 +447,20 @@ int main(int argc, char *argv[])
       print_usage(stdout);
       break;
     case 'n': {
-      if (notify_host)
-        err_exit(EX_USAGE, "cannot specify multiple hosts");
-      notify_host = optarg;
-      char *p = strchr(notify_host, ':');
+      if (nnotifies >= SIZE(notifies))
+        err_exit(EX_UNAVAILABLE, "too many observers to notify");
+      char *p = strchr(optarg, ':');
       if (! p)
-        err_exit(EX_USAGE, "no port specified");
+        err_exit(EX_USAGE, "port is not specified");
       *p = '\0';
-      notify_port = get_int(p+1);
+      if (! inet_aton(optarg, &notifies[nnotifies].addr))
+        err_exit(EX_USAGE, "inet_aton %s", optarg);
+      notifies[nnotifies++].port = get_int(p+1);
       break;
     }
+    case 'v':
+      verbose = true;
+      break;
     case '?':
       print_usage(stderr);
       break;
