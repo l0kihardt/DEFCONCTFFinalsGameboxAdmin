@@ -472,6 +472,7 @@ void run(int dir_fd, const char *path, const char *file)
         run(fd, sub_path, dirent.d_name);
         free(sub_path);
       }
+    fd = -1;
     closedir(dirp);
   } else if (S_ISREG(statbuf.st_mode)) {
     if ((len = lseek(fd, 0, SEEK_END)) < 0)
