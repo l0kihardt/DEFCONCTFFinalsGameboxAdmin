@@ -44,8 +44,8 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
+const double FLAG_DURATION = 5*60; // 5 minutes
 const int BUF_SIZE = 1024;
-const int MAX_BYTES = 1024;
 const char PATTERN_SEPARATOR[] = " \t,|";
 const char *PCAPNG_SUFFIXES[] = {".cap", ".pcapng"};
 
@@ -188,6 +188,18 @@ void err_exit(int exitno, const char *format, ...)
   exit(exitno);
 }
 
+double get_double(const char *arg)
+{
+  char *end;
+  errno = 0;
+  double ret = strtod(arg, &end);
+  if (errno)
+    err_exit(EX_USAGE, "get_double: %s", arg);
+  if (*end)
+    err_exit(EX_USAGE, "get_double: nonnumeric character");
+  return ret;
+}
+
 void print_usage(FILE *fh)
 {
   fprintf(fh, "Usage: %s [OPTIONS] dir\n", program_invocation_short_name);
@@ -199,7 +211,6 @@ void print_usage(FILE *fh)
   exit(fh == stdout ? 0 : EX_USAGE);
 }
 
-vector<pair<string, string>> patterns;
 bool opt_verbose = false;
 bool opt_count = false;
 bool opt_offset = false;
@@ -209,25 +220,24 @@ int length = 0;
 
 namespace MultiBackwardDAWG
 {
-int tail, allo;
-struct Node { int l, f, c[256], id; } g[2*MAX_BYTES];
-
-void clear(int x)
+int tail;
+struct Node
 {
-  memset(&g[x], 0, sizeof(Node));
-  g[x].id = -1;
-}
+  int l = 0, f = 0, c[256], id = -1;
+  Node() { memset(&c, 0, sizeof c); }
+};
+vector<Node> g;
 
 void init()
 {
-  clear(1);
-  allo = 2;
+  g.clear();
+  g.resize(2);
 }
 
 void extend(int c)
 {
-  int p = tail, q, r, x = allo++;
-  clear(x);
+  int p = tail, q, r, x = g.size();
+  g.resize(x+1);
   g[x].l = g[tail].l + 1;
   for (; p && ! g[p].c[c]; p = g[p].f)
     g[p].c[c] = x;
@@ -236,8 +246,8 @@ void extend(int c)
   else if (g[p].l + g[q = g[p].c[c]].l)
     g[x].f = q;
   else {
-    r = allo++;
-    clear(r);
+    r = g.size();
+    g.resize(r+1);
     g[r] = g[q];
     g[r].l = g[p].l + 1;
     g[x].f = g[q].f = r;
@@ -249,8 +259,6 @@ void extend(int c)
 
 void add(int len, const char *s)
 {
-  if (allo+2*len >= SIZE(g))
-    err_exit(EX_UNAVAILABLE, "total length of pattern is too large");
   tail = 1;
   ROF(i, 0, len)
     extend((u8)s[i]);
@@ -287,34 +295,42 @@ void search(int len, const u8 *haystack, const function<void(int, int)> &fn)
 }
 };
 
-void add_pattern(const char *pattern, const char *hint)
+struct Flag
+{
+  double timestamp = 0;
+  string service, flag;
+};
+vector<Flag> flags;
+
+void add_flag(const Flag &flag)
 {
   if (opt_verbose) {
-    printf("pattern: %s", pattern);
-    if (*hint)
-      printf("\t%s", hint);
+    printf("pattern: %s\n", flag.flag.c_str());
     puts("");
   }
-  if (*pattern) {
-    int len = strlen(pattern);
-    if (! length)
-      length = len;
-    else if (len != length)
-      err_exit(EX_USAGE, "different lengths of patterns: %s", pattern);
-    MultiBackwardDAWG::add(len, pattern);
-    patterns.emplace_back(pattern, hint);
-  }
+  if (! length)
+    length = flag.flag.size();
+  else if (length != flag.flag.size())
+    err_exit(EX_USAGE, "different lengths of patterns: %s", flag.flag.c_str());
+  MultiBackwardDAWG::add(flag.flag.size(), flag.flag.c_str());
+  flags.push_back(flag);
 }
 
-struct Meta
+struct Packet
 {
-
-} meta;
+  double timestamp = 0;
+  u32 offset;
+  Packet() {}
+  Packet(u32 offset) : offset(offset) {}
+  bool operator<(const Packet &rhs) const {
+    return offset < rhs.offset;
+  }
+};
 
 class PCAPNG
 {
 public:
-  vector<u32> offsets;
+  vector<Packet> packets;
   u16 tsresol = 6;
 
   bool parse_interface_description_block(u32 len, const u8 *block) {
@@ -358,10 +374,11 @@ public:
         return false;
       case 0x00000006: { // Enhanced Packet Block
         if (block_len < 28) return false;
-        offsets.push_back(i);
-        //has_timestamp = true;
-        //u64 timestamp = u64(*(u32*)&block[12]) << 32 | *(u32*)&block[16];
-        //printf("%lu %lu\n", timestamp/1000000, timestamp%1000000);
+        Packet packet;
+        u64 timestamp = u64(*(u32*)&block[12]) << 32 | *(u32*)&block[16];
+        packet.timestamp = timestamp * 1e-6;
+        packet.offset = i;
+        packets.push_back(packet);
         break;
       }
       default:
@@ -376,8 +393,8 @@ public:
     return true;
   }
 
-  u32 get_frame_number(u32 offset) {
-    return lower_bound(offsets.begin(), offsets.end(), offset)-offsets.begin()+1;
+  int offset2pos(u32 offset) {
+    return lower_bound(packets.begin(), packets.end(), Packet(offset))-packets.begin();
   }
 };
 
@@ -449,13 +466,22 @@ void run(int dir_fd, const char *path, const char *file)
       printf("%s\t%zd\n", path, matches.size());
     else {
       for (auto &x: matches) {
-        printf("%s", path);
-        if (opt_offset)
-          printf("\t%d", x.second);
-        printf("\t%s\t%s", patterns[x.first].first.c_str(), patterns[x.first].second.c_str());
-        if (use_frame_number)
-          printf("\tframe_number==%u", pcap.get_frame_number(x.second));
-        puts("");
+        const Flag &flag = flags[x.first];
+        if (use_frame_number) {
+          int no = pcap.offset2pos(x.second);
+          if (no < pcap.packets.size()) {
+            double t = pcap.packets[no].timestamp;
+            if (flag.timestamp == 0.0 || flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION) {
+              printf("%s", path);
+              if (opt_offset) printf("\t%d", x.second);
+              printf("\t%s\t%.6lf\tframe_number==%u\n", flag.flag.c_str(), flag.timestamp, no+1);
+            }
+          }
+        } else {
+          printf("%s", path);
+          if (opt_offset) printf("\t%d", x.second);
+          printf("\t%s\n", flag.flag.c_str());
+        }
       }
     }
   } else if (opt_verbose)
@@ -520,32 +546,48 @@ int main(int argc, char *argv[])
       err_exit(EX_OSFILE, "fopen");
     while (fgets(buf, sizeof buf, fh)) {
       char *t = buf+strlen(buf)-1;
-      if (*t != '\n')
-        err_exit(EX_USAGE, "pattern `%s` is too long", buf);
-      *t = '\0';
-      t = buf+strcspn(buf, PATTERN_SEPARATOR);
-      if (! *t)
-        add_pattern(buf, "");
-      else {
+      if (*t == '\n')
         *t = '\0';
-        add_pattern(buf, t+1);
+      else if (strlen(buf) == sizeof buf - 1)
+        err_exit(EX_USAGE, "pattern `%s` is too long", buf);
+      vector<char *> fields;
+      char *pattern = buf;
+      for (; ; pattern = NULL) {
+        char *p = strtok_r(pattern, PATTERN_SEPARATOR, &t);
+        if (! p) break;
+        fields.push_back(p);
       }
+      Flag flag;
+      if (fields.size() == 1) {
+        flag.flag = fields[0];
+        add_flag(flag);
+      } else if (fields.size() == 3) {
+        flag.timestamp = get_double(fields[0]);
+        flag.service = fields[1];
+        flag.flag = fields[2];
+        add_flag(flag);
+      } else
+        err_exit(EX_USAGE, "should have 1 or 3 fields");
     }
-  } else if (optind >= argc)
-    err_exit(EX_USAGE, "pattern is not specified");
-  else {
-    char *pattern = argv[optind++], *p, *t;
+  } else if (optind < argc) {
+    char *pattern = argv[optind++], *t;
     for (; ; pattern = NULL) {
       char *p = strtok_r(pattern, PATTERN_SEPARATOR, &t);
       if (! p) break;
-      add_pattern(p, "");
+      if (*p) {
+        Flag flag;
+        flag.flag = p;
+        add_flag(flag);
+      }
     }
   }
+  if (flags.empty())
+    err_exit(EX_USAGE, "pattern is not specified");
 
   if (optind >= argc)
     err_exit(EX_USAGE, "missing file operand");
-  REP(i, patterns.size())
-    MultiBackwardDAWG::mark(i, patterns[i].first.size(), patterns[i].first.c_str());
+  REP(i, flags.size())
+    MultiBackwardDAWG::mark(i, flags[i].flag.size(), flags[i].flag.c_str());
   FOR(i, optind, argc)
     run(-1, argv[i], argv[i]);
 }
