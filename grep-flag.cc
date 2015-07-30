@@ -47,7 +47,7 @@ typedef uint64_t u64;
 const double FLAG_DURATION = 5*60; // 5 minutes
 const int BUF_SIZE = 1024;
 const char PATTERN_SEPARATOR[] = " \t,|";
-const char *PCAPNG_SUFFIXES[] = {".cap", ".pcapng"};
+const char *PCAPNG_SUFFIXES[] = {".cap", ".pcap", ".pcapng"};
 
 ///// log
 
@@ -335,10 +335,36 @@ struct Packet
   }
 };
 
-class PCAPNG
+class PCAP
 {
 public:
   vector<Packet> packets;
+
+  virtual ~PCAP() {}
+
+  virtual bool parse(u32 len, const u8 *a) {
+    if (len < 16) return false;
+    if (*(u32*)a != 0xa1b2c3d4) return false;
+    for (u32 j, i = 24; i <= len-16; i = j) {
+      u8 *block = (u8*)a+i;
+      j = i+16+*(u32*)&block[8];
+      if (j < i+16) return false;
+      Packet packet;
+      packet.timestamp = *(u32*)&block[0] + double(*(u32*)&block[4]) * 1e-6;
+      packet.offset = i;
+      packets.push_back(packet);
+    }
+    return true;
+  }
+
+  int offset2pos(u32 offset) {
+    return lower_bound(packets.begin(), packets.end(), Packet(offset))-packets.begin();
+  }
+};
+
+class PCAPNG : public PCAP
+{
+public:
   u16 tsresol = 6;
 
   bool parse_interface_description_block(u32 len, const u8 *block) {
@@ -360,7 +386,7 @@ public:
     return true;
   }
 
-  bool parse(u32 len, const u8 *a) {
+  bool parse(u32 len, const u8 *a) override {
     if (len < 8) return false;
     errno = 0;
     for (u32 j, i = 0; i < len-8; i = j) {
@@ -400,10 +426,6 @@ public:
     }
     return true;
   }
-
-  int offset2pos(u32 offset) {
-    return lower_bound(packets.begin(), packets.end(), Packet(offset))-packets.begin();
-  }
 };
 
 bool is_pcapng(const char *file)
@@ -419,7 +441,7 @@ bool is_pcapng(const char *file)
 void run(int dir_fd, const char *path, const char *file)
 {
   off_t len;
-  PCAPNG pcap;
+  PCAP *pcap = NULL;
   struct stat statbuf;
   u8 *haystack = (u8*)MAP_FAILED;
   vector<pair<int,int>> matches;
@@ -450,17 +472,23 @@ void run(int dir_fd, const char *path, const char *file)
         run(fd, sub_path, dirent.d_name);
         free(sub_path);
       }
-    dir_fd = -1;
     closedir(dirp);
   } else if (S_ISREG(statbuf.st_mode)) {
     if ((len = lseek(fd, 0, SEEK_END)) < 0)
       err_msg_g("lseek `%s'", path);
     if (len > 0) {
-        haystack = (u8 *)mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
+      haystack = (u8 *)mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
       if (haystack == (u8 *)MAP_FAILED)
         err_msg_g("mmap `%s'", path);
-      if (is_pcapng(path) && ! pcap.parse(len, haystack))
-        err_msg_g("failed to parse `%s'", path);
+      if (is_pcapng(path)) {
+        pcap = new PCAP;
+        if (! pcap->parse(len, haystack)) {
+          delete pcap;
+          pcap = new PCAPNG;
+          if (! pcap->parse(len, haystack))
+            err_msg_g("failed to parse `%s'", path);
+        }
+      }
     }
 
     MultiBackwardDAWG::search(len, haystack, [&](int id, int offset) {
@@ -472,10 +500,10 @@ void run(int dir_fd, const char *path, const char *file)
       for (auto &x: matches) {
         const Flag &flag = flags[x.first];
         int no = -1;
-        if (pcap.packets.size()) {
-          no = pcap.offset2pos(x.second);
-          if (no >= pcap.packets.size()) continue;
-          double t = pcap.packets[no].timestamp;
+        if (pcap) {
+          no = pcap->offset2pos(x.second);
+          if (no >= pcap->packets.size()) continue;
+          double t = pcap->packets[no].timestamp;
           if (! (flag.timestamp == 0.0 || (flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION))) continue;
         }
         printf("%s", path);
@@ -495,6 +523,8 @@ quit:
     munmap(haystack, len);
   if (fd >= 0)
     close(fd);
+  if (pcap)
+    delete pcap;
 }
 
 int main(int argc, char *argv[])
