@@ -206,7 +206,15 @@ void print_usage(FILE *fh)
   fputs(
         "\n"
         "Options:\n"
-        "  -F      "
+        "  -b, --byte-offset        print the byte offset with output lines\n"
+        "  -c, --count              print only a count of matching lines per FILE\n"
+        "  -f, --file=FILE          obtain flags from FILE, one per line\n"
+        "                           1 field: $FLAG . timestamp is omitted, each matching packet is displayed\n"
+        "                           3 fields: $EPOCH $SERVICE $FLAG . packets out of [$EPOCH, $EPOCH+FLAG_DURATION) are ignored\n"
+        "  -H, --with-frame-number  print frame.number\n"
+        "  -h, --help               display this help text and exit\n"
+        "  -r, --recursive          recursive\n"
+        "  -v, --verbose            verbose mode\n"
         , fh);
   exit(fh == stdout ? 0 : EX_USAGE);
 }
@@ -415,7 +423,6 @@ void run(int dir_fd, const char *path, const char *file)
   struct stat statbuf;
   u8 *haystack = (u8*)MAP_FAILED;
   vector<pair<int,int>> matches;
-  bool use_frame_number = false;
   int fd = -1;
 
   errno = 0;
@@ -452,11 +459,8 @@ void run(int dir_fd, const char *path, const char *file)
         haystack = (u8 *)mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
       if (haystack == (u8 *)MAP_FAILED)
         err_msg_g("mmap `%s'", path);
-      if (opt_frame_number && is_pcapng(path)) {
-        use_frame_number = true;
-        if (! pcap.parse(len, haystack))
-          err_msg_g("failed to parse `%s'", path);
-      }
+      if (is_pcapng(path) && ! pcap.parse(len, haystack))
+        err_msg_g("failed to parse `%s'", path);
     }
 
     MultiBackwardDAWG::search(len, haystack, [&](int id, int offset) {
@@ -467,21 +471,20 @@ void run(int dir_fd, const char *path, const char *file)
     else {
       for (auto &x: matches) {
         const Flag &flag = flags[x.first];
-        if (use_frame_number) {
-          int no = pcap.offset2pos(x.second);
-          if (no < pcap.packets.size()) {
-            double t = pcap.packets[no].timestamp;
-            if (flag.timestamp == 0.0 || flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION) {
-              printf("%s", path);
-              if (opt_offset) printf("\t%d", x.second);
-              printf("\t%s\t%.6lf\tframe_number==%u\n", flag.flag.c_str(), flag.timestamp, no+1);
-            }
-          }
-        } else {
-          printf("%s", path);
-          if (opt_offset) printf("\t%d", x.second);
-          printf("\t%s\n", flag.flag.c_str());
+        int no = -1;
+        if (pcap.packets.size()) {
+          no = pcap.offset2pos(x.second);
+          if (no >= pcap.packets.size()) continue;
+          double t = pcap.packets[no].timestamp;
+          if (! (flag.timestamp == 0.0 || (flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION))) continue;
         }
+        printf("%s", path);
+        if (opt_offset) printf("\t%d", x.second);
+        printf("\t%s", flag.flag.c_str());
+        if (flag.timestamp != 0.0)
+          printf("\t%s\t%.6lf", flag.service.c_str(), flag.timestamp);
+          printf("\tframe.number==%u", no+1);
+        puts("");
       }
     }
   } else if (opt_verbose)
@@ -501,7 +504,7 @@ int main(int argc, char *argv[])
   static struct option long_options[] = {
     {"byte-offset",         no_argument,       0,   'b'},
     {"count",               no_argument,       0,   'c'},
-    {"fixed-strings",       no_argument,       0,   'F'},
+    {"file",                no_argument,       0,   'f'},
     {"frame-number",        no_argument,       0,   'H'},
     {"help",                no_argument,       0,   'h'},
     {"recursive",           no_argument,       0,   'r'},
@@ -509,7 +512,7 @@ int main(int argc, char *argv[])
     {0,                     0,                 0,   0},
   };
 
-  while ((opt = getopt_long(argc, argv, "bcF:Hhrv", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "bcf:Hhrv", long_options, NULL)) != -1) {
     switch (opt) {
     case 'b':
       opt_offset = true;
@@ -517,7 +520,7 @@ int main(int argc, char *argv[])
     case 'c':
       opt_count = true;
       break;
-    case 'F':
+    case 'f':
       pattern_file = optarg;
       break;
     case 'H':
