@@ -224,14 +224,14 @@ bool opt_count = false;
 bool opt_offset = false;
 bool opt_frame_number = false;
 bool opt_recursive = false;
-int length = 0;
+int shortest = 0;
 
 namespace MultiBackwardDAWG
 {
 int tail;
 struct Node
 {
-  int l = 0, f = 0, c[256], id = -1;
+  int l = 0, f = 0, c[256], p = -1, id = -1;
   Node() { memset(&c, 0, sizeof c); }
 };
 vector<Node> g;
@@ -251,7 +251,7 @@ void extend(int c)
     g[p].c[c] = x;
   if (! p)
     g[x].f = 1;
-  else if (g[p].l + g[q = g[p].c[c]].l)
+  else if (g[p].l+1 == g[q = g[p].c[c]].l)
     g[x].f = q;
   else {
     r = g.size();
@@ -277,28 +277,31 @@ void mark(int id, int len, const char *s)
   int x = 1;
   ROF(i, 0, len)
     x = g[x].c[(u8)s[i]];
+  g[x].id = id;
   for (; x; x = g[x].f)
-    g[x].id = id;
+    g[x].p = max(g[x].p, len-shortest);
 }
 
 void search(int len, const u8 *haystack, const function<void(int, int)> &fn)
 {
   int x, y, j, shift, period;
-  for (int i = 0; i <= len-length; i += shift) {
+  for (int i = 0; i <= len-shortest; ) {
     x = 1;
-    shift = length;
-    j = length-1;
-    for (; j >= 0 && (y = g[x].c[haystack[i+j]]); j--) {
+    shift = shortest;
+    j = shortest-1;
+    bool found = false;
+    for (; i+j >= 0 && (y = g[x].c[haystack[i+j]]); j--) {
       x = y;
-      if (g[x].id >= 0) {
+      if (g[x].p >= 0) {
         period = shift;
-        shift = j;
+        shift = j-g[x].p;
+      }
+      if (g[x].id >= 0 && shortest-j == g[x].l) {
+        found = true;
+        fn(g[x].id, i+shortest);
       }
     }
-    if (j < 0) {
-      fn(g[x].id, i);
-      shift = period;
-    }
+    i += max(found ? period : shift, 1);
   }
 }
 };
@@ -316,10 +319,8 @@ void add_flag(const Flag &flag)
     printf("pattern: %s\n", flag.flag.c_str());
     puts("");
   }
-  if (! length)
-    length = flag.flag.size();
-  else if (length != flag.flag.size())
-    err_exit(EX_USAGE, "different lengths of patterns: %s", flag.flag.c_str());
+  if (! shortest || flag.flag.size() < shortest)
+    shortest = flag.flag.size();
   MultiBackwardDAWG::add(flag.flag.size(), flag.flag.c_str());
   flags.push_back(flag);
 }
@@ -492,26 +493,28 @@ void run(int dir_fd, const char *path, const char *file)
       }
     }
 
-    MultiBackwardDAWG::search(len, haystack, [&](int id, int offset) {
-      matches.emplace_back(id, offset);
+    MultiBackwardDAWG::search(len, haystack, [&](int id, int end_offset) {
+      matches.emplace_back(id, end_offset);
     });
     if (opt_count)
       printf("%s\t%zd\n", path, matches.size());
     else {
       for (auto &x: matches) {
         const Flag &flag = flags[x.first];
+        int offset = x.second-flag.flag.size();
         int no = -1;
         if (pcap) {
-          no = pcap->offset2pos(x.second);
+          no = pcap->offset2pos(offset);
           if (no >= pcap->packets.size()) continue;
           double t = pcap->packets[no].timestamp;
           if (! (flag.timestamp == 0.0 || (flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION))) continue;
         }
         printf("%s", path);
-        if (opt_offset) printf("\t%d", x.second);
+        if (opt_offset) printf("\t%d", offset);
         printf("\t%s", flag.flag.c_str());
         if (flag.timestamp != 0.0)
           printf("\t%s\t%.6lf", flag.service.c_str(), flag.timestamp);
+        if (opt_frame_number && pcap)
           printf("\tframe.number==%u", no+1);
         puts("");
       }
