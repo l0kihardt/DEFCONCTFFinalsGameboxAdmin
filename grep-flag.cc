@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <climits>
 #include <err.h>
 #include <errno.h>
 #include <execinfo.h>
@@ -231,7 +232,7 @@ namespace MultiBackwardDAWG
 int tail;
 struct Node
 {
-  int l = 0, f = 0, c[256], p = -1, id = -1;
+  int l = 0, f = 0, c[256], p = INT_MAX, id = -1;
   Node() { memset(&c, 0, sizeof c); }
 };
 vector<Node> g;
@@ -279,7 +280,7 @@ void mark(int id, int len, const char *s)
     x = g[x].c[(u8)s[i]];
   g[x].id = id;
   for (; x; x = g[x].f)
-    g[x].p = max(g[x].p, len-shortest);
+    g[x].p = min(g[x].p, len-shortest);
 }
 
 void search(int len, const u8 *haystack, const function<void(int, int)> &fn)
@@ -287,14 +288,17 @@ void search(int len, const u8 *haystack, const function<void(int, int)> &fn)
   int x, y, j, shift, period;
   for (int i = 0; i <= len-shortest; ) {
     x = 1;
-    shift = shortest;
+    period = shift = shortest;
     j = shortest-1;
     bool found = false;
     for (; i+j >= 0 && (y = g[x].c[haystack[i+j]]); j--) {
       x = y;
-      if (g[x].p >= 0) {
-        period = shift;
-        shift = j-g[x].p;
+      if (g[x].p < INT_MAX) {
+        int t = j+g[x].p;
+        if (t < shift) {
+          period = shift;
+          shift = t;
+        }
       }
       if (g[x].id >= 0 && shortest-j == g[x].l) {
         found = true;
