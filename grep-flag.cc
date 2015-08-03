@@ -45,7 +45,6 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-const double FLAG_DURATION = 5*60; // 5 minutes
 const int BUF_SIZE = 1024;
 const char PATTERN_SEPARATOR[] = " \t,|";
 const char *PCAPNG_SUFFIXES[] = {".cap", ".pcap", ".pcapng"};
@@ -194,12 +193,13 @@ void print_usage(FILE *fh)
 {
   const char *name = program_invocation_short_name;
   const char *path = program_invocation_name;
-  fprintf(fh, "Usage: %s [OPTIONS] dir\n", name);
+  fprintf(fh, "Usage: %s [OPTIONS] pattern file|dir\n", name);
   fprintf(fh,
           "\n"
           "Options:\n"
           "  -b, --byte-offset        print the byte offset with output lines\n"
           "  -c, --count              print only a count of matching lines per FILE\n"
+          "  -d, --flag-lifespan=T    flag lifespan (default: 300 sec)\n"
           "  -f, --file=FILE          obtain flags from FILE, one per line\n"
           "                           1 field: $FLAG . timestamp is omitted, each matching packet is displayed\n"
           "                           3 fields: $EPOCH $SERVICE $FLAG . packets out of [$EPOCH, $EPOCH+FLAG_DURATION) are ignored\n"
@@ -227,6 +227,7 @@ bool opt_offset = false;
 bool opt_frame_number = false;
 bool opt_recursive = false;
 int shortest = 0;
+double flag_lifespan = 5*60; // 5 minutes
 
 namespace MultiBackwardDAWG
 {
@@ -512,7 +513,7 @@ void run(int dir_fd, const char *path, const char *file)
           no = pcap->offset2pos(offset);
           if (no >= pcap->packets.size()) continue;
           double t = pcap->packets[no].timestamp;
-          if (! (flag.timestamp == 0.0 || (flag.timestamp <= t && t < flag.timestamp+FLAG_DURATION))) continue;
+          if (! (flag.timestamp == 0.0 || (flag.timestamp <= t && t < flag.timestamp+flag_lifespan))) continue;
         }
         printf("%s", path);
         if (opt_offset) printf("\t%d", offset);
@@ -544,6 +545,7 @@ int main(int argc, char *argv[])
     {"byte-offset",         no_argument,       0,   'b'},
     {"count",               no_argument,       0,   'c'},
     {"file",                no_argument,       0,   'f'},
+    {"flag-lifespan",       required_argument, 0,   'd'},
     {"frame-number",        no_argument,       0,   'H'},
     {"help",                no_argument,       0,   'h'},
     {"recursive",           no_argument,       0,   'r'},
@@ -558,6 +560,9 @@ int main(int argc, char *argv[])
       break;
     case 'c':
       opt_count = true;
+      break;
+    case 'd':
+      flag_lifespan = get_double(optarg);
       break;
     case 'f':
       pattern_file = optarg;
