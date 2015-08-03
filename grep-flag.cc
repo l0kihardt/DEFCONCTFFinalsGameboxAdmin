@@ -193,6 +193,7 @@ double get_double(const char *arg)
 void print_usage(FILE *fh)
 {
   const char *name = program_invocation_short_name;
+  const char *path = program_invocation_name;
   fprintf(fh, "Usage: %s [OPTIONS] dir\n", name);
   fprintf(fh,
           "\n"
@@ -215,7 +216,8 @@ void print_usage(FILE *fh)
           "  %s -H aa,bbb,cccc a.cap   # display filter: tshark -r in.cap -Y 'frame.number==1780' -w out.cap\n"
           "  %s -r aa dir              # recursive\n"
           "  %s -H =(print '1438622200\\tservice0\\tiamflag') a.cap    # parse a.cap to get timestamps and grep valid flags only\n"
-          , name, name, name, name, name);
+          "  %s -H =(print '1438622200\\tservice0\\tiamflag\\n1438622300\\tservice1\\tflag2') a.cap   # multiple patterns are separated by newline\n"
+          , path, path, path, path, path, path);
   exit(fh == stdout ? 0 : EX_USAGE);
 }
 
