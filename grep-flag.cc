@@ -175,17 +175,6 @@ void err_exit(int exitno, const char *format, ...)
   output_error(errno > 0, format, ap);
   errno = saved;
   va_end(ap);
-
-  void *bt[99];
-  char buf[1024];
-  int nptrs = backtrace(bt, SIZE(buf));
-  int i = sprintf(buf, "addr2line -Cfipe %s", program_invocation_name), j = 0;
-  while (j < nptrs && i+30 < sizeof buf)
-    i += sprintf(buf+i, " %#x", bt[j++]);
-  strcat(buf, ">&2");
-  fputs("\n", stderr);
-  system(buf);
-  //backtrace_symbols_fd(buf, nptrs, STDERR_FILENO);
   exit(exitno);
 }
 
@@ -203,20 +192,30 @@ double get_double(const char *arg)
 
 void print_usage(FILE *fh)
 {
-  fprintf(fh, "Usage: %s [OPTIONS] dir\n", program_invocation_short_name);
-  fputs(
-        "\n"
-        "Options:\n"
-        "  -b, --byte-offset        print the byte offset with output lines\n"
-        "  -c, --count              print only a count of matching lines per FILE\n"
-        "  -f, --file=FILE          obtain flags from FILE, one per line\n"
-        "                           1 field: $FLAG . timestamp is omitted, each matching packet is displayed\n"
-        "                           3 fields: $EPOCH $SERVICE $FLAG . packets out of [$EPOCH, $EPOCH+FLAG_DURATION) are ignored\n"
-        "  -H, --with-frame-number  print frame.number\n"
-        "  -h, --help               display this help text and exit\n"
-        "  -r, --recursive          recursive\n"
-        "  -v, --verbose            verbose mode\n"
-        , fh);
+  const char *name = program_invocation_short_name;
+  fprintf(fh, "Usage: %s [OPTIONS] dir\n", name);
+  fprintf(fh,
+          "\n"
+          "Options:\n"
+          "  -b, --byte-offset        print the byte offset with output lines\n"
+          "  -c, --count              print only a count of matching lines per FILE\n"
+          "  -f, --file=FILE          obtain flags from FILE, one per line\n"
+          "                           1 field: $FLAG . timestamp is omitted, each matching packet is displayed\n"
+          "                           3 fields: $EPOCH $SERVICE $FLAG . packets out of [$EPOCH, $EPOCH+FLAG_DURATION) are ignored\n"
+          "  -H, --with-frame-number  print frame.number\n"
+          "  -h, --help               display this help text and exit\n"
+          "  -r, --recursive          recursive\n"
+          "  -v, --verbose            verbose mode\n"
+         );
+  fprintf(fh,
+          "\n"
+          "Examples:\n"
+          "  %s aa,bbb,cccc a.cap      # 3 patterns\n"
+          "  %s -b aa,bbb,cccc a.cap   # display offset\n"
+          "  %s -H aa,bbb,cccc a.cap   # display filter: tshark -r in.cap -Y 'frame.number==1780' -w out.cap\n"
+          "  %s -r aa dir              # recursive\n"
+          "  %s -H =(print '1438622200\\tservice0\\tiamflag') a.cap    # parse a.cap to get timestamps and grep valid flags only\n"
+          , name, name, name, name, name);
   exit(fh == stdout ? 0 : EX_USAGE);
 }
 
