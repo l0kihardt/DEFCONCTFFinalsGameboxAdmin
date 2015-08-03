@@ -193,7 +193,7 @@ void print_usage(FILE *fh)
 {
   const char *name = program_invocation_short_name;
   const char *path = program_invocation_name;
-  fprintf(fh, "Usage: %s [OPTIONS] pattern file|dir\n", name);
+  fprintf(fh, "Usage: %s [OPTIONS] pattern file|dir...\n", name);
   fprintf(fh,
           "\n"
           "Options:\n"
