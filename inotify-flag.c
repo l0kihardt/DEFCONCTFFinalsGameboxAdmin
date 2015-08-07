@@ -43,6 +43,7 @@
 #define SEND_TIMEOUT_MILLI 2000
 
 bool verbose = false;
+char *opt_rename = NULL;
 
 ///// log
 
@@ -157,15 +158,15 @@ void err_exit(int exitno, const char *format, ...)
   errno = saved;
   va_end(ap);
 
-  void *bt[99];
-  char buf[1024];
-  int nptrs = backtrace(bt, SIZE(buf));
-  int i = sprintf(buf, "addr2line -Cfipe %s", program_invocation_name), j = 0;
-  while (j < nptrs && i+30 < sizeof buf)
-    i += sprintf(buf+i, " %#x", bt[j++]);
-  strcat(buf, ">&2");
-  fputs("\n", stderr);
-  system(buf);
+  //void *bt[99];
+  //char buf[1024];
+  //int nptrs = backtrace(bt, SIZE(buf));
+  //int i = sprintf(buf, "addr2line -Cfipe %s", program_invocation_name), j = 0;
+  //while (j < nptrs && i+30 < sizeof buf)
+  //  i += sprintf(buf+i, " %#x", bt[j++]);
+  //strcat(buf, ">&2");
+  //fputs("\n", stderr);
+  //system(buf);
   //backtrace_symbols_fd(buf, nptrs, STDERR_FILENO);
   exit(exitno);
 }
@@ -215,7 +216,8 @@ struct Watch
 
 bool is_flag(const char *name)
 {
-  return ! strcmp(name, FLAG_NAME);
+  return true;
+  //return ! strcmp(name, FLAG_NAME);
 }
 
 struct Watch *new_watch(void)
@@ -362,13 +364,13 @@ void notify(const char *format, ...)
   free(buf);
 }
 
-void new_flag(struct Watch *watch)
+void new_flag(struct Watch *watch, const char *service)
 {
   struct timespec now;
   if (clock_gettime(CLOCK_REALTIME, &now) < 0)
     err_exit(EX_OSERR, "clock_gettime");
   char flag[FLAG_BUFSIZE], path[PATH_MAX];
-  snprintf(path, sizeof path, "%s/%s", watch->path, FLAG_NAME);
+  snprintf(path, sizeof path, "%s/%s", watch->path, service);
   int fd = open(path, O_RDONLY), nread;
   if (fd < 0) {
     err_msg("open %s", watch->path);
@@ -384,7 +386,6 @@ void new_flag(struct Watch *watch)
     if (! IS_FLAG_CHAR(flag[i]))
       break;
   if (i) {
-    const char *service = strrchr(watch->path, '/')+1;
     flag[i] = '\0';
     notify("{\"event\":\"new\",\"timestamp\":%ld.%09ld,\"service\":\"%s\",\"flag\":\"%s\"}\n", (long)now.tv_sec, now.tv_nsec, service, flag);
   }
@@ -394,9 +395,8 @@ quit:
     close(fd);
 }
 
-void do_access(struct Watch *watch)
+void do_access(struct Watch *watch, const char *service)
 {
-  const char *service = strrchr(watch->path, '/')+1;
   struct timespec now;
   if (clock_gettime(CLOCK_REALTIME, &now) < 0)
     err_exit(EX_OSERR, "clock_gettime");
@@ -407,6 +407,20 @@ void do_access(struct Watch *watch)
   }
 }
 
+void change_name(char *argv[])
+{
+  for (int i = 0; argv[i]; i++)
+    for (char *p = argv[i]; *p; p++)
+      *p = '\0';
+  strcpy(argv[0], opt_rename);
+  int fd = open("/proc/self/comm", O_WRONLY),
+      len = strlen(opt_rename);
+  if (fd < 0)
+    err_exit(EX_OSERR, "rename");
+  if (write(fd, opt_rename, len) < len)
+    err_exit(EX_OSERR, "rename");
+}
+
 int main(int argc, char *argv[])
 {
   char path[PATH_MAX];
@@ -415,6 +429,7 @@ int main(int argc, char *argv[])
     {"count",               required_argument, 0,   'c'},
     {"help",                no_argument,       0,   'h'},
     {"notify",              required_argument, 0,   'n'},
+    {"rename",              no_argument,       0,   'r'},
     {"verbose",             no_argument,       0,   'v'},
     {0,                     0,                 0,   0},
   };
@@ -423,7 +438,7 @@ int main(int argc, char *argv[])
   if (inotify_fd < 0)
     err_exit(EX_OSERR, "inotify_init");
 
-  while ((opt = getopt_long(argc, argv, "-c:hn:v", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "-c:hn:r:v", long_options, NULL)) != -1) {
     switch (opt) {
     case 1: {
       struct Watch *watch = new_watch();
@@ -432,7 +447,7 @@ int main(int argc, char *argv[])
       watch->path = strdup(path);
       struct stat statbuf;
       if (stat(optarg, &statbuf) < 0)
-        err_exit(EX_OSFILE, "stat");
+        err_exit(EX_OSFILE, "stat `%s'", optarg);
       if (! (statbuf.st_mode & S_IFDIR))
         err_exit(EX_OSFILE, "not directory");
       watch->mode = statbuf.st_mode;
@@ -458,6 +473,9 @@ int main(int argc, char *argv[])
       notifies[nnotifies++].port = get_int(p+1);
       break;
     }
+    case 'r':
+      opt_rename = strdup(optarg);
+      break;
     case 'v':
       verbose = true;
       break;
@@ -466,6 +484,9 @@ int main(int argc, char *argv[])
       break;
     }
   }
+
+  if (opt_rename)
+    change_name(argv);
 
   if (! nwatched)
     err_exit(EX_USAGE, "no directory specified to watch");
@@ -489,12 +510,12 @@ int main(int argc, char *argv[])
             watch->free_read--;
           else {
             log_event("ACCESS %s\n", ev->name);
-            do_access(watch);
+            do_access(watch, ev->name);
           }
         } else if (ev->mask & IN_CLOSE_WRITE) {
           log_event("CLOSE_WRITE %s\n", ev->name);
           if (is_flag(ev->name))
-            new_flag(watch);
+            new_flag(watch, ev->name);
         } else if (ev->mask & IN_CREATE) {
           log_event("CREATE %s\n", ev->name);
           if (is_flag(ev->name)) {
@@ -506,7 +527,7 @@ int main(int argc, char *argv[])
             if (lstat(path, &statbuf) < 0)
               err_msg("lstat");
             else if (S_IFLNK & statbuf.st_mode)
-              new_flag(watch);
+              new_flag(watch, ev->name);
             free(path);
           }
         } else if (ev->mask & IN_DELETE) {
@@ -521,7 +542,7 @@ int main(int argc, char *argv[])
           log_event("MOVED_TO %s\n", ev->name);
           if (is_flag(ev->name)) {
             add_inotify_flag(inotify_fd, ev, watch);
-            new_flag(watch);
+            new_flag(watch, ev->name);
           }
         }
         event_count > 0 && event_count--;
@@ -532,4 +553,6 @@ int main(int argc, char *argv[])
     if (watched[i].wd >= 0)
       rm_watch(inotify_fd, &watched[i]);
   close(inotify_fd);
+  if (opt_rename)
+    free(opt_rename);
 }

@@ -4,14 +4,14 @@
 setopt nullglob
 setopt extended_glob
 
-sftp_cmd='sftp -i /home/ray/Defcon/recon/home/ctf/blue-lotus-capture -b- blue-lotus@10.5.10.3'
+sftp_cmd='sftp -i /home/ray/ctf/bluelotus-capture -b- bluelotus@10.5.8.6'
 remote_filename=latest.cap
 interval=60
-captures_path=/data/captures
+captures_path=/home/ray/defcon23
 last_saved=$(echo $captures_path/all/*(on[-1]:t))
 
 typeset -A services
-services=(eliza 8888 wdub 4444 imap 143 justify 6969)
+services=(rxc 799)
 
 mkdir -p $captures_path/all
 for service in ${(k)services}; do
@@ -28,7 +28,7 @@ while :; do
         last_saved=$tim
 
         for service in ${(k)services}; do
-          tshark -r $captures_path/all/$filename -2R "tcp.port==${services[$service]} and ip.addr==10.5.10.2 and ip.addr!=10.5.10.0/24" -w $captures_path/$service/$filename
+          tshark -r $captures_path/all/$filename -2R "tcp.port==${services[$service]}" -w $captures_path/$service/$filename
         done
       fi
     fi

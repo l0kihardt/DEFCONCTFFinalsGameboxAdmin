@@ -2,22 +2,29 @@
 # send notifications when some service is down
 set -u
 
-interval=2
+interval=10
 timeout=5
-gamebox=127.1
 
-declare -A check
-check[killer]='pgrep -x killer'
-check[inotify-flag@test]='pgrep -u test -x inotify-flag'
+declare -A gamebox_check
+gamebox=ctf@10.5.8.4
+gamebox_check[killer]='pgrep -x killer'
+gamebox_check[inotify-flag@rxc]='pgrep -u rxc inotify-flag'
+
+declare -A rr_check
+rr=10.5.8.105
+rr_check[search_indexer]='pgrep -f "indexer -ri /home/ray/defcon23"'
+rr_check[search_server]='pgrep -f "indexer -r /home/ray/defcon23"'
+rr_check[search_pcap2ap]='pgrep -f "pcap2ap -r /home/ray/defcon23"'
 
 declare -a bad
 
 while :; do
-  bad=
   local now=$(date +%s)
+
+  bad=
   local ssh_error=
-  for i in ${(@k)check}; do
-    ssh -p 5022 -o ConnectTimeout=$timeout $gamebox "${check[$i]} > /dev/null"
+  for i in ${(@k)gamebox_check}; do
+    ssh -o BatchMode=yes -o ConnectTimeout=$timeout $gamebox "${gamebox_check[$i]} > /dev/null"
     ret=$?
     if [[ $ret == 255 ]]; then
       ssh_error=1
@@ -28,10 +35,30 @@ while :; do
     fi
   done
   if [[ -n $ssh_error ]]; then
-    notify-send -a CTF 'ssh error'
+    notify-send -a gamebox 'ssh error'
   elif (( ${#bad} > 0 )); then
-    notify-send -a CTF "bad: ${bad[*]}"
+    notify-send -a gamebox "bad: ${bad[*]}"
   fi
+
+  ssh_error=
+  bad=
+  for i in ${(@k)rr_check}; do
+    ssh -o BatchMode=yes -o ConnectTimeout=$timeout $rr "${rr_check[$i]} > /dev/null"
+    ret=$?
+    if [[ $ret == 255 ]]; then
+      ssh_error=1
+      break
+    fi
+    if [[ $ret != 0 ]]; then
+      bad=(${bad[@]} $i)
+    fi
+  done
+  if [[ -n $ssh_error ]]; then
+    notify-send -a rr 'ssh error'
+  elif (( ${#bad} > 0 )); then
+    notify-send -a rr "bad: ${bad[*]}"
+  fi
+
   ((delay=now+interval-$(date +%s))) || :
   ((delay>0)) && sleep $delay || :
 done

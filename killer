@@ -1,27 +1,28 @@
-#!/bin/bash -eu
+#!/bin/bash -u
 
 interval=1
-use_long=
-use_unknown=
+opt_long=
+opt_unknown=
+opt_exe=
 
 # maximum allowed etimes for each task
 declare -a tasks
 declare -A exe max_etimes
-tasks=(test test)
+tasks=(test)
 
-exe[test]=/bin/bash:/usr/bin/cat
-exe[eliza]=/bin/bash
+exe[rxc]=/home/rxc/rxc:/home/ctf/admin/inotify-flag
+exe[test]=/bin/cat
 
-max_etimes[test]=1
-max_etimes[eliza]=30
-max_etimes[imap]=30
-max_etimes[wdub]=30
-max_etimes[justify]=30
+comm[rxc]=
+
+max_etimes[rxc]=30
+max_etimes[test]=30
 
 ### log
 
 log_generic() { fmt=$1; echo -e "$(date +%T.%N) $fmt" "${@:2}"; }
 log_action() { tput setaf 2; log_generic "$@"; tput sgr0; }
+log_status() { tput setaf 3; log_generic "$@"; tput sgr0; }
 
 ### getopt
 
@@ -43,14 +44,15 @@ while :; do
   case "$1" in
     -h | --help) usage 0;;
     -i | --interval) eval interval=$2; shift 2;;
-    -l | --long) use_long=1; shift;;
-    -u | --unknown) use_unknown=1; shift;;
+    -l | --long) opt_long=1; shift;;
+    -u | --unknown) opt_unknown=1; shift;;
+    -e | --exe) opt_exe=1; shift;;
     --) shift; break;;
     *) break;;
   esac
 done
 
-if [[ -z $use_unknown && -z $use_long ]]; then
+if [[ -z $opt_unknown && -z $opt_long ]]; then
   echo no mode specified
   usage 1
 fi
@@ -58,34 +60,54 @@ fi
 ### main
 
 cease() {
-  if sudo -u $user kill -9 $pid; then
-    log_action kill unknown: pid=$pid etimes=$etimes comm=$comm
+  local user=$1
+  local pid=$2
+  out=$(script -qc "if sudo -u $user kill -9 $pid /dev/null &>/dev/null; then echo killed; fi" <<< "$password")
+  if [[ $out =~ killed ]]; then
+    log_action killed unknown: pid=$pid etimes=$etimes comm=$comm
+  else
+    log_status failed to kill unknown: pid=$pid etimes=$etimes comm=$comm
   fi
 }
 
 main() {
+  read -srp "$USER password: " password
+  echo
   while :; do
     local now=$(date +%s)
-    ps -u "${tasks[*]}" -o pid,user,etimes,comm -ww --no-headers | while read pid user etimes comm; do
+    ps -u "${tasks[*]}" -o pid,user,etimes,comm -ww --no-headers | while read pid user etimes comm_; do
       # kill long
-      if [[ -n $use_long ]]; then
+      if [[ -n $opt_long ]]; then
         if [[ $etimes -gt ${max_etimes[$user]} ]]; then
           cease $user $pid
         fi
       fi
 
       # kill unknown
-      if [[ -n $use_unknown ]]; then
-        IFS=: read -ra t <<< "${exe[$user]}"
-        found=
+      if [[ -n $opt_unknown ]]; then
+        IFS=: read -ra t <<< "${comm[$user]}"
+        local found=
         for i in "${t[@]}"; do
           if [[ ${i##*/} = $comm ]]; then
             found=1
-            continue
+            break
           fi
         done
         if [[ -z $found ]]; then
           cease $user $pid
+        elif [[ -n $opt_exe ]]; then
+          local proc_exe=$(script -qc "sudo -u $user readlink /proc/$pid/exe" <<< "$password")
+          IFS=: read -ra t <<< "${exe[$user]}"
+          found=
+          for i in "${t[@]}"; do
+            if [[ ${i##*/} = $proc_exe ]]; then
+              found=1
+              break
+            fi
+          done
+          if [[ -z $found ]]; then
+            cease $user $pid
+          fi
         fi
       fi
 
