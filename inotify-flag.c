@@ -44,6 +44,8 @@
 
 bool verbose = false;
 char *opt_rename = NULL;
+int nservices = 0;
+char *services[100];
 
 ///// log
 
@@ -216,8 +218,10 @@ struct Watch
 
 bool is_flag(const char *name)
 {
-  return true;
-  //return ! strcmp(name, FLAG_NAME);
+  REP(i, nservices)
+    if (! strcmp(services[i], name))
+      return true;
+  return false;
 }
 
 struct Watch *new_watch(void)
@@ -373,7 +377,8 @@ void new_flag(struct Watch *watch, const char *service)
   snprintf(path, sizeof path, "%s/%s", watch->path, service);
   int fd = open(path, O_RDONLY), nread;
   if (fd < 0) {
-    err_msg("open %s", watch->path);
+    if (errno != EACCES)
+      err_msg("open %s", watch->path);
     goto quit;
   }
   if ((nread = read(fd, flag, sizeof flag - 1)) < 0) {
@@ -438,7 +443,7 @@ int main(int argc, char *argv[])
   if (inotify_fd < 0)
     err_exit(EX_OSERR, "inotify_init");
 
-  while ((opt = getopt_long(argc, argv, "-c:hn:r:v", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "-c:hn:r:s:v", long_options, NULL)) != -1) {
     switch (opt) {
     case 1: {
       struct Watch *watch = new_watch();
@@ -476,6 +481,11 @@ int main(int argc, char *argv[])
     case 'r':
       opt_rename = strdup(optarg);
       break;
+    case 's':
+      if (nservices >= SIZE(services))
+        err_exit(EX_UNAVAILABLE, "too many services to inotify");
+      services[nservices++] = strdup(optarg);
+      break;
     case 'v':
       verbose = true;
       break;
@@ -506,11 +516,13 @@ int main(int argc, char *argv[])
             break;
           }
         if (ev->mask & IN_ACCESS) {
-          if (watch->free_read > 0)
-            watch->free_read--;
-          else {
-            log_event("ACCESS %s\n", ev->name);
-            do_access(watch, ev->name);
+          if (is_flag(ev->name)) {
+            if (watch->free_read > 0)
+              watch->free_read--;
+            else {
+              log_event("ACCESS %s\n", ev->name);
+              do_access(watch, ev->name);
+            }
           }
         } else if (ev->mask & IN_CLOSE_WRITE) {
           log_event("CLOSE_WRITE %s\n", ev->name);
@@ -555,4 +567,6 @@ int main(int argc, char *argv[])
   close(inotify_fd);
   if (opt_rename)
     free(opt_rename);
+  REP(i, nservices)
+    free(services[i]);
 }

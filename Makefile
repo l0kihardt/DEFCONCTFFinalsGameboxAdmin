@@ -1,5 +1,6 @@
 CFLAGS += -std=c99 -g3
 CXXFLAGS += -std=c++11 -g3
+LDLIBS += -lrt
 #CPPFLAGS += -fkeep-inline-functions -fsanitize=address
 ELF := proxy-service inotify-flag grep-flag
 

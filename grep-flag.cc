@@ -215,8 +215,8 @@ void print_usage(FILE *fh)
           "  %s -b aa,bbb,cccc a.cap   # display offset\n"
           "  %s -H aa,bbb,cccc a.cap   # display filter: tshark -r in.cap -Y 'frame.number==1780' -w out.cap\n"
           "  %s -r aa dir              # recursive\n"
-          "  %s -H =(print '1438622200\\tservice0\\tiamflag') a.cap    # parse a.cap to get timestamps and grep valid flags only\n"
-          "  %s -H =(print '1438622200\\tservice0\\tiamflag\\n1438622300\\tservice1\\tflag2') a.cap   # multiple patterns are separated by newline\n"
+          "  %s -H -f =(print '1438622200\\tservice0\\tiamflag') a.cap    # parse a.cap to get timestamps and grep valid flags only\n"
+          "  %s -H -f =(print '1438622200\\tservice0\\tiamflag\\n1438622300\\tservice1\\tflag2') a.cap   # multiple patterns are separated by newline\n"
           , path, path, path, path, path, path);
   exit(fh == stdout ? 0 : EX_USAGE);
 }

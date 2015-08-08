@@ -6,16 +6,23 @@ opt_unknown=
 opt_exe=
 
 # maximum allowed etimes for each task
-declare -a tasks
-declare -A exe max_etimes
-tasks=(test)
+declare -a services
+declare -A max_etimes proc_exe proc_comm
+services=(rxc ombdsu tachikoma)
 
-exe[rxc]=/home/rxc/rxc:/home/ctf/admin/inotify-flag
-exe[test]=/bin/cat
+proc_exe[ombdsu]=/home/ombdsu/ombdsu:/home/ctf/admin/inotify-flag:/usr/bin/watch
+proc_exe[rxc]=/home/rxc/rxc:/home/ctf/admin/inotify-flag:/usr/bin/watch
+proc_exe[tachikoma]=/home/tachikoma/tachikoma:/home/ctf/admin/inotify-flag:/usr/bin/watch
+proc_exe[test]=/bin/cat:/tmp/cat
 
-comm[rxc]=
+proc_comm[ombdsu]=ombdsu:fff:watch
+proc_comm[rxc]=rxc:fff:watch
+proc_comm[tachikoma]=tachikoma:fff:watch
+proc_comm[test]=cat
 
+max_etimes[ombdsu]=300
 max_etimes[rxc]=30
+max_etimes[tachikoma]=300
 max_etimes[test]=30
 
 ### log
@@ -31,22 +38,23 @@ usage() {
 Usage: ${0##*/} OPTIONS
 kill long running or unknown processes
 Options:
+  -e, --exe         check unknown by both /proc/\$pid/{comm,exe}
   -i, --interval N  scan interval
   -l, --long        kill long
-  -u, --unknown     kill unknown comm (basename of /proc/*/exe)
+  -u, --unknown     kill unknown comm by /proc/\$pid/comm
 e
   exit $1
 }
 
-set -- $(getopt -o hi:lu -l help,interval,long,unknown -- "$@")
+set -- $(getopt -o ehi:lu -l exe,help,interval,long,unknown -- "$@")
 
 while :; do
   case "$1" in
+    -e | --exe) opt_exe=1; shift;;
     -h | --help) usage 0;;
     -i | --interval) eval interval=$2; shift 2;;
     -l | --long) opt_long=1; shift;;
     -u | --unknown) opt_unknown=1; shift;;
-    -e | --exe) opt_exe=1; shift;;
     --) shift; break;;
     *) break;;
   esac
@@ -62,51 +70,76 @@ fi
 cease() {
   local user=$1
   local pid=$2
-  out=$(script -qc "if sudo -u $user kill -9 $pid /dev/null &>/dev/null; then echo killed; fi" <<< "$password")
+  local comm=$3
+  local exe=$4
+  local reason=$5
+  #out=$(script -qc "if sudo -u $user kill -9 $pid &>/dev/null; then echo killed; fi" /dev/null <<< "$password")
+  out=$($(dirname "$0")/mysudo -u $user bash -c "if kill -9 $pid &>/dev/null; then echo killed; fi" <<< "$password")
   if [[ $out =~ killed ]]; then
-    log_action killed unknown: pid=$pid etimes=$etimes comm=$comm
+    log_action killed $reason: user=$user pid=$pid etimes=$etimes comm=$comm exe="'$exe'"
   else
-    log_status failed to kill unknown: pid=$pid etimes=$etimes comm=$comm
+    log_status failed to kill $reason: user=$user pid=$pid etimes=$etimes comm=$comm exe="'$exe'"
   fi
 }
 
 main() {
+  # select existing users on this gamebox
+  declare -a services2
+  local services2=()
+  for i in "${services[@]}"; do
+    if id -u $i &>/dev/null; then
+      log_status found service $i
+      services2+=($i)
+    fi
+  done
+  services=("${services2[@]}")
+  unset services2
+
   read -srp "$USER password: " password
   echo
+
   while :; do
     local now=$(date +%s)
-    ps -u "${tasks[*]}" -o pid,user,etimes,comm -ww --no-headers | while read pid user etimes comm_; do
+    # hack, old bash may prepend a space to "${services[*]}"
+    ps -u "${services[*]}" -o pid,user:20,etimes,comm -ww --no-headers | while read pid user etimes comm; do
       # kill long
       if [[ -n $opt_long ]]; then
         if [[ $etimes -gt ${max_etimes[$user]} ]]; then
-          cease $user $pid
+          cease "$user" "$pid" "$comm" '' long
         fi
       fi
 
       # kill unknown
       if [[ -n $opt_unknown ]]; then
-        IFS=: read -ra t <<< "${comm[$user]}"
+        IFS=: read -ra t <<< "${proc_comm[$user]}"
         local found=
         for i in "${t[@]}"; do
-          if [[ ${i##*/} = $comm ]]; then
+          if [[ $i = $comm ]]; then
             found=1
             break
           fi
         done
         if [[ -z $found ]]; then
-          cease $user $pid
+          cease "$user" "$pid" "$comm" '' comm
         elif [[ -n $opt_exe ]]; then
-          local proc_exe=$(script -qc "sudo -u $user readlink /proc/$pid/exe" <<< "$password")
-          IFS=: read -ra t <<< "${exe[$user]}"
+          local exe=$($(dirname "$0")/mysudo -u $user readlink /proc/$pid/exe <<< "$password")
+          if [[ -z $exe || "$exe" = '<defunct>' ]]; then
+            continue
+          fi
+          #for ((g=0; g< ${#exe}; g++)); do
+          #  LC_CTYPE=C printf "c %d\n" "'${exe:$g:1}"
+          #done
+          #echo --
+          IFS=: read -ra t <<< "${proc_exe[$user]}"
           found=
           for i in "${t[@]}"; do
-            if [[ ${i##*/} = $proc_exe ]]; then
+            if [[ $i = $exe ]]; then
               found=1
               break
             fi
           done
           if [[ -z $found ]]; then
-            cease $user $pid
+            cease "$user" "$pid" "$comm" "$exe" exe
           fi
         fi
       fi
