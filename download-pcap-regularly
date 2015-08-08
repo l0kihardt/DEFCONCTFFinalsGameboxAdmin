@@ -11,7 +11,7 @@ captures_path=/home/ray/defcon23
 last_saved=$(echo $captures_path/all/*(on[-1]:t))
 
 typeset -A services
-services=(rxc 799 ombdsu 502 tachikoma 9 hackermud 880)
+services=(rxc 799 ombdsu 502 tachikoma 9 hackermud 880 badlogger 4800)
 
 mkdir -p $captures_path/all
 for service in ${(k)services}; do

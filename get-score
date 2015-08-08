@@ -2,7 +2,7 @@
 interval=300
 while :; do
   now=$(date +%s)
-  curl -s --cacert ~/DEF/ctf/ca/ca.crt -E ~/DEF/ctf/clients/blue-lotus/blue-lotus.crt --key ~/DEF/ctf/clients/blue-lotus/blue-lotus.key https://10.3.1.7/scoreboard.json | jq -r '.generated_at as $g | .standings[] | "\($g)\t\(.team)\t\(.score)"' >> ~/DEF/data/score.tsv
+  curl -s --cacert ~/DEF/ctf/ca/ca.crt -E ~/DEF/ctf/clients/blue-lotus/blue-lotus.crt --key ~/DEF/ctf/clients/blue-lotus/blue-lotus.key https://10.3.1.7/scoreboard.json | jq -r '.generated_at as $g | .standings[] | "\($g)\t\(.team)\t\(.score)"' >> ~/DEF/data/score.day2.tsv
   ((delay=now+interval-$(date +%s)))
   ((delay>0)) && sleep $delay
 done
