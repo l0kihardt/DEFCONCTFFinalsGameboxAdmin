@@ -1,5 +1,8 @@
 #!/usr/bin/expect
 
+#set filename ~/Dropbox/ctf/services/rpi/badlogger.exe
+set filename ~/Dropbox/ctf/services/rpi/badlogger.exe.patch_stack_ovf.larger_malloc.patch_signed_comprasion.patch_modulo_10
+
 spawn nc 10.5.8.3 8989
 expect {
   "HELLO\r\n" {
@@ -13,11 +16,15 @@ expect {
   }
 }
 
-sleep 3
 spawn lftp 10.5.8.3
-expect "lftp*> " {
-  send "put ~/Dropbox/ctf/services/rpi/badlogger.exe.patch_stack_ovf.larger_malloc.patch_signed_comprasion.patch_modulo_10 -o badlogger.exe\r"
-  expect "lftp*> "
+expect {
+  "transferred\r\n" {}
+  -re {553[^\r]*\n} exp_continue
+  -re {lftp[^\r]*> } {
+    send "put $filename -o badlogger.exe\r"
+    sleep 1
+    exp_continue
+  }
 }
 
 spawn nc 10.5.8.3 8989
@@ -32,4 +39,3 @@ expect {
     exit 1
   }
 }
-close
