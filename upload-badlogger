@@ -1,0 +1,35 @@
+#!/usr/bin/expect
+
+spawn nc 10.5.8.3 8989
+expect {
+  "HELLO\r\n" {
+    send "KILL\r"
+    exp_continue
+  }
+  "KILLED\r\n" {}
+  timeout {
+    puts error
+    exit 1
+  }
+}
+
+sleep 3
+spawn lftp 10.5.8.3
+expect "lftp*> " {
+  send "put ~/Dropbox/ctf/services/rpi/badlogger.exe.patch_stack_ovf.larger_malloc.patch_signed_comprasion.patch_modulo_10 -o badlogger.exe\r"
+  expect "lftp*> "
+}
+
+spawn nc 10.5.8.3 8989
+expect {
+  "HELLO\r\n" {
+    send "START\r"
+    exp_continue
+  }
+  STARTED {send_user "\n"}
+  timeout {
+    puts error
+    exit 1
+  }
+}
+close
