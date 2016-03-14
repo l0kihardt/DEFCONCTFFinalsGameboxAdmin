@@ -1,0 +1,12 @@
+#!/usr/bin/env expect
+set timeout 10
+log_user 0
+stty -echo
+expect_user -re "(.*)\n"
+stty echo
+set password $expect_out(1,string)
+spawn sudo -p password: {*}$argv
+expect {
+  password: {send "$password\r"; exp_continue}
+  eof {send_user [string trim $expect_out(buffer)]}
+}

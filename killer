@@ -4,11 +4,13 @@ interval=1
 opt_long=
 opt_unknown=
 opt_exe=
+mysudo="$(dirname "$0")/mysudo"
+password=
 
-# maximum allowed etimes for each task
 declare -a services
 declare -A max_etimes proc_exe proc_comm
 services=(rxc ombdsu tachikoma)
+services=(test)
 
 proc_exe[ombdsu]=/home/ombdsu/ombdsu:/home/ctf/admin/inotify-flag:/usr/bin/watch
 proc_exe[rxc]=/home/rxc/rxc:/home/ctf/admin/inotify-flag:/usr/bin/watch
@@ -20,6 +22,7 @@ proc_comm[rxc]=rxc:fff:watch
 proc_comm[tachikoma]=tachikoma:fff:watch
 proc_comm[test]=cat
 
+# considered long running if the elapses time since the process was started > $max_etimes[$service]
 max_etimes[ombdsu]=300
 max_etimes[rxc]=30
 max_etimes[tachikoma]=300
@@ -73,13 +76,8 @@ cease() {
   local comm=$3
   local exe=$4
   local reason=$5
-  #out=$(script -qc "if sudo -u $user kill -9 $pid &>/dev/null; then echo killed; fi" /dev/null <<< "$password")
-  out=$($(dirname "$0")/mysudo -u $user bash -c "if kill -9 $pid &>/dev/null; then echo killed; fi" <<< "$password")
-  if [[ $out =~ killed ]]; then
-    log_action killed $reason: user=$user pid=$pid etimes=$etimes comm=$comm exe="'$exe'"
-  else
-    log_status failed to kill $reason: user=$user pid=$pid etimes=$etimes comm=$comm exe="'$exe'"
-  fi
+  log_action kill "$reason": "user=$user" "pid=$pid" "etimes=$etimes" "comm=$comm" "exe=$exe"
+  $mysudo -u "$user" bash -c "kill -9 $pid &>/dev/null" <<< "$password"
 }
 
 main() {
@@ -87,8 +85,8 @@ main() {
   declare -a services2
   local services2=()
   for i in "${services[@]}"; do
-    if id -u $i &>/dev/null; then
-      log_status found service $i
+    if id -u "$i" &>/dev/null; then
+      log_status found service "$i"
       services2+=($i)
     fi
   done
@@ -99,9 +97,10 @@ main() {
   echo
 
   while :; do
-    local now=$(date +%s)
+    local now
+    now=$(date +%s)
     # hack, old bash may prepend a space to "${services[*]}"
-    ps -u "${services[*]}" -o pid,user:20,etimes,comm -ww --no-headers | while read pid user etimes comm; do
+    ps -u "${services[*]}" -o pid,user:20,etimes,comm -ww --no-headers | while read -r pid user etimes comm; do
       # kill long
       if [[ -n $opt_long ]]; then
         if [[ $etimes -gt ${max_etimes[$user]} ]]; then
@@ -114,7 +113,7 @@ main() {
         IFS=: read -ra t <<< "${proc_comm[$user]}"
         local found=
         for i in "${t[@]}"; do
-          if [[ $i = $comm ]]; then
+          if [[ $i = "$comm" ]]; then
             found=1
             break
           fi
@@ -122,18 +121,15 @@ main() {
         if [[ -z $found ]]; then
           cease "$user" "$pid" "$comm" '' comm
         elif [[ -n $opt_exe ]]; then
-          local exe=$($(dirname "$0")/mysudo -u $user readlink /proc/$pid/exe <<< "$password")
-          if [[ -z $exe || "$exe" = '<defunct>' ]]; then
+          local exe
+          exe=$("$mysudo" -u "$user" readlink "/proc/$pid/exe" <<< "$password" 2>/dev/null)
+          if [[ -z $exe || $exe = '<defunct>' ]]; then
             continue
           fi
-          #for ((g=0; g< ${#exe}; g++)); do
-          #  LC_CTYPE=C printf "c %d\n" "'${exe:$g:1}"
-          #done
-          #echo --
           IFS=: read -ra t <<< "${proc_exe[$user]}"
           found=
           for i in "${t[@]}"; do
-            if [[ $i = $exe ]]; then
+            if [[ $i = "$exe" ]]; then
               found=1
               break
             fi
@@ -146,7 +142,7 @@ main() {
 
     done
     ((delay=now+interval-$(date +%s))) || :
-    ((delay>0)) && sleep $delay || :
+    if ((delay > 0)); then sleep $delay; fi
   done
 }
 

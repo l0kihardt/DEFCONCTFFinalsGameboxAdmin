@@ -1,0 +1,5 @@
+[Service]
+ExecStart=/bin/zsh -c 'ssh -t ctf@10.5.8.4 "~/bin/inotifywait -mrqe CLOSE_WRITE,CREATE,MODIFY /etc/xinetd.d /etc/xinetd-32.d ~" | while read l; do notify-send -a x64 "$(date +%T) $l"; done'
+
+[Install]
+WantedBy=defcon.target

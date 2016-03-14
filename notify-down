@@ -1,0 +1,32 @@
+#!/bin/zsh
+
+alias crl='curl --cacert ~/DEF/ctf/ca/ca.crt -E ~/DEF/ctf/clients/blue-lotus/blue-lotus.crt --key ~/DEF/ctf/clients/blue-lotus/blue-lotus.key'
+while :; do
+  timer=$(crl -sS https://10.3.1.7/timers)
+  round=$[$(date -d $(jq -r .timers.round <<< "$timer") +%s)]
+  now=$(date -d $(jq -r .time <<< "$timer") +%s)
+  sec=$((round-now))
+  crl -sS https://10.3.1.7/dashboard -o /tmp/oo
+  down=()
+  for service in rxc tachikoma ombdsu hackermud badlogger irkd; do
+    d=()
+    grep -A 3 $service /tmp/oo |
+    for ((i=0;i<4;i++)); do
+      read line
+      if [[ $i -gt 0 ]]; then
+        d+=($(echo $line | grep -o 'ok\|down'))
+      fi
+    done
+    if [[ ${d[3]} = down ]]; then
+      down+=("$service ${d[*]}")
+    fi
+  done
+  if [[ ${#down} -gt 0 ]]; then
+    notify-send -a down "now:$(date +%T -d @$now) ${(j:\n:)down}"
+  fi
+  sleep 1
+  if [[ $sec -gt 1 ]]; then
+    echo now:$(date +%T -d @$now) round-end:$(date +%T -d @$round) sleep $sec
+    sleep $[sec-1]
+  fi
+done
