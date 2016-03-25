@@ -1,17 +1,17 @@
 #!/bin/zsh
 # Download latest PCAP regularly with sftp and dissect PCAP into smaller ones based on TCP ports
 
-setopt nullglob
-setopt extended_glob
+setopt nullglob #output null string
+setopt extended_glob 
 
 sftp_cmd='sftp -i /home/ray/ctf/bluelotus-capture -b- bluelotus@10.5.8.6'
 remote_filename=latest.cap
 interval=60
 captures_path=/home/ray/defcon23
-last_saved=$(echo $captures_path/all/*(on[-1]:t))
+last_saved=$(echo $captures_path/all/*(on[-1]:t)) #get last saved pcap
 
 typeset -A services
-services=(rxc 799 ombdsu 502 tachikoma 9 hackermud 880 badlogger 4800 irkd 666)
+services=(rxc 799 ombdsu 502 tachikoma 9 hackermud 880 badlogger 4800 irkd 666) #array
 
 mkdir -p $captures_path/all
 for service in ${(k)services}; do

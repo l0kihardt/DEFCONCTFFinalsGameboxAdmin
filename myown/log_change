@@ -1,0 +1,12 @@
+#!/bin/bash
+log_file=./lowkey/log
+not_display="swp"
+./inotify-flag -v ./ | while read time event file; do
+	res=$(echo $file | grep "${not_display}")
+	if [[ "$res"x == ""x ]];then
+		# write to a log file
+		echo "file ${file}  ${event} ${time}" >> $log_file 
+	fi
+done 
+
+

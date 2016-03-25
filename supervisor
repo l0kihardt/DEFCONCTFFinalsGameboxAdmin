@@ -6,12 +6,12 @@ interval=10
 timeout=5
 
 declare -A gamebox_check
-gamebox=ctf@10.5.8.4
+gamebox=ctf@10.5.8.4 #game box
 gamebox_check[killer]='pgrep -x killer'
 gamebox_check[inotify-flag@rxc]='pgrep -u rxc inotify-flag'
 
 declare -A rr_check
-rr=10.5.8.105
+rr=10.5.8.105 #my own ip
 rr_check[search_indexer]='pgrep -f "indexer -ri /home/ray/defcon23"'
 rr_check[search_server]='pgrep -f "indexer -r /home/ray/defcon23"'
 rr_check[search_pcap2ap]='pgrep -f "pcap2ap -r /home/ray/defcon23"'
